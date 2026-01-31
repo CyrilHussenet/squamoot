@@ -31,8 +31,11 @@ jobs:
         run: |
           git config --global user.name "Bot Carte"
           git config --global user.email "bot@github.com"
-          git add index.html all_points.json
-          # On pull avec rebase pour éviter les conflits
+          # On met de côté les changements pour faire un pull propre
+          git add .
+          git stash
           git pull --rebase origin main
-          git commit -m "Mise à jour automatique des traces" || exit 0
+          git stash pop || echo "Rien à restaurer"
+          git add index.html all_points.json
+          git commit -m "Auto-update map data" || exit 0
           git push origin main
