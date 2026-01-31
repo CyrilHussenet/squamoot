@@ -7,7 +7,6 @@ import time
 from folium.plugins import HeatMap
 from datetime import datetime
 
-# Configuration du log
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -15,11 +14,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger()
 
-# Configuration (Secrets GitHub)
 EMAIL = os.getenv("KOMOOT_EMAIL")
 PASSWORD = os.getenv("KOMOOT_PASSWORD")
-REPO_OWNER = "CyrilHussenet" # À REMPLACER
-REPO_NAME = "squamoot"           # À REMPLACER
+# --- REMPLACER ICI ---
+REPO_OWNER = "VOTRE_PSEUDO_GITHUB" 
+REPO_NAME = "VOTRE_NOM_DE_DEPOT"
+# ---------------------
 
 def run_sync():
     if not EMAIL or not PASSWORD:
@@ -27,22 +27,32 @@ def run_sync():
         return
 
     session = requests.Session()
+    # User-Agent pour éviter d'être bloqué comme un robot
+    session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+    
     all_points = []
-    total_dist = 0.0
-    total_elev = 0.0
-    count = 0
+    total_dist, total_elev, count = 0.0, 0.0, 0
     
     try:
         logger.info("Connexion à Komoot...")
-        login_url = "https://www.komoot.com/api/v1/signin"
+        # Nouvelle URL de connexion
+        login_url = "https://www.komoot.com/api/v1/login"
         response = session.post(login_url, data={'email': EMAIL, 'password': PASSWORD})
-        response.raise_for_status()
-        user_id = response.json()['username']
+        
+        if response.status_code != 200:
+            logger.error(f"Echec connexion ({response.status_code}). Vérifiez vos Secrets.")
+            return
+
+        user_id = response.json().get('username')
+        logger.info(f"Connecté avec succès : {user_id}")
 
         page = 0
         while True:
             tours_url = f"https://www.komoot.com/api/v1/users/{user_id}/tours/?type=tour_recorded&limit=100&page={page}"
-            tours = session.get(tours_url).json().get('_embedded', {}).get('tours', [])
+            resp = session.get(tours_url)
+            if resp.status_code != 200: break
+            
+            tours = resp.json().get('_embedded', {}).get('tours', [])
             if not tours: break
 
             for tour in tours:
@@ -59,7 +69,6 @@ def run_sync():
                                     all_points.append([p.latitude, p.longitude])
                     except: continue
                 time.sleep(0.1)
-            logger.info(f"Page {page} terminée.")
             page += 1
 
         if all_points:
@@ -69,7 +78,6 @@ def run_sync():
             m = folium.Map(location=[avg_lat, avg_lon], zoom_start=11, tiles='CartoDB dark_matter')
             HeatMap(all_points, radius=4, blur=2, min_opacity=0.4, gradient={0.4: 'blue', 0.7: 'cyan', 1: 'white'}).add_to(m)
 
-            # HTML du Tableau de bord et du Bouton
             header_html = f"""
             <div style="position: fixed; top: 10px; left: 50px; z-index: 1000; background: rgba(26,26,26,0.8); 
                         color: white; padding: 15px; border-radius: 10px; border: 1px solid #00f2ff; font-family: sans-serif;">
@@ -80,13 +88,9 @@ def run_sync():
                     <div><b style="font-size: 20px;">{int(total_elev)}</b><br><small>D+ (m)</small></div>
                 </div>
             </div>
-
             <button onclick="triggerUpdate()" style="position: fixed; top: 10px; right: 10px; z-index: 1000; 
                 background: #1a1a1a; color: #00f2ff; border: 1px solid #00f2ff; padding: 12px; 
-                cursor: pointer; border-radius: 5px; font-weight: bold;">
-                🔄 ACTUALISER
-            </button>
-
+                cursor: pointer; border-radius: 5px; font-weight: bold;">🔄 ACTUALISER</button>
             <script>
             function triggerUpdate() {{
                 const token = prompt("Entrez votre GitHub Personal Access Token :");
@@ -96,8 +100,8 @@ def run_sync():
                     headers: {{ 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github.v3+json' }},
                     body: JSON.stringify({{ ref: 'main' }})
                 }}).then(res => {{
-                    if (res.ok) alert("Synchronisation lancée ! Revenez dans 2 minutes.");
-                    else alert("Erreur de token ou de permissions.");
+                    if (res.ok) alert("Synchronisation lancée !");
+                    else alert("Erreur.");
                 }});
             }}
             </script>
@@ -107,7 +111,7 @@ def run_sync():
             """
             m.get_root().html.add_child(folium.Element(header_html))
             m.save("index.html")
-            logger.info("Carte et tableau de bord générés.")
+            logger.info("Fichier index.html créé.")
 
     except Exception as e:
         logger.error(f"Erreur : {e}")
