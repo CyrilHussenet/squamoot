@@ -5,50 +5,70 @@ import folium
 import logging
 import time
 import re
+import json
 from folium.plugins import HeatMap
 from datetime import datetime
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger()
 
-# --- VOTRE LIEN DE PROFIL ICI ---
+# --- CONFIGURATION ---
+# Laissez votre lien tel quel, le script va se débrouiller avec
 PROFILE_URL = "https://www.komoot.com/fr-fr/user/1366042741035" 
-# --- INFOS GITHUB ---
 REPO_OWNER = "CyrilHussenet"
 REPO_NAME = "squamoot"
 
 def get_real_id(session):
-    """Cherche le vrai ID technique caché dans le code HTML de la page de profil"""
     try:
-        logger.info(f"Analyse de la page profil : {PROFILE_URL}")
+        logger.info(f"Scan approfondi de la page : {PROFILE_URL}")
         response = session.get(PROFILE_URL)
+        
         if response.status_code != 200:
-            logger.error("Impossible d'accéder au profil public.")
+            logger.error(f"Impossible d'accéder au profil (Code {response.status_code})")
             return None
         
-        # On cherche un motif du type "api/v1/users/123456" dans le code de la page
-        # C'est souvent présent dans les scripts intégrés
-        match = re.search(r'api/v1/users/(\d+)', response.text)
-        if match:
-            real_id = match.group(1)
-            logger.info(f"✅ Vrai ID trouvé : {real_id}")
-            return real_id
-        else:
-            logger.error("Aucun ID trouvé dans la page HTML.")
-            return None
+        html = response.text
+
+        # METHODE 1 : Recherche dans le JSON Next.js (Le plus probable pour 2024/2025)
+        # On cherche une structure du type "user":{"id":123456...
+        match_json = re.search(r'"user":\{"id":(\d+),', html)
+        if match_json:
+            found_id = match_json.group(1)
+            logger.info(f"✅ ID trouvé (Méthode JSON) : {found_id}")
+            return found_id
+
+        # METHODE 2 : Recherche de l'ID global javascript
+        match_global = re.search(r'"crt_user_id":(\d+)', html)
+        if match_global:
+            found_id = match_global.group(1)
+            logger.info(f"✅ ID trouvé (Méthode Globale) : {found_id}")
+            return found_id
+
+        # METHODE 3 : Recherche brutale d'un ID numérique différent de celui de l'URL
+        # On cherche un nombre de 6 à 10 chiffres qui n'est PAS 1366042741035
+        potential_ids = re.findall(r'"id":(\d{6,10})', html)
+        for pid in potential_ids:
+            if pid != "1366042741035": # On ignore l'ID public s'il est trouvé
+                logger.info(f"⚠️ ID potentiel détecté : {pid}")
+                return pid # On tente le premier trouvé
+
+        logger.error("❌ Echec critique : Aucun ID technique trouvé dans le code source.")
+        # Pour le debug, on affiche un petit bout du HTML si ça plante
+        logger.info(f"Début du HTML reçu : {html[:200]}")
+        return None
+
     except Exception as e:
-        logger.error(f"Erreur lors de la recherche d'ID : {e}")
+        logger.error(f"Erreur d'analyse : {e}")
         return None
 
 def run_sync():
     session = requests.Session()
-    # On se fait passer pour un vrai navigateur Chrome
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
         'Accept-Language': 'fr-FR,fr;q=0.9',
     })
     
-    # 1. On trouve le bon ID
     user_id = get_real_id(session)
     if not user_id: return
 
@@ -58,20 +78,26 @@ def run_sync():
     try:
         page = 0
         while True:
-            # 2. On utilise l'ID trouvé pour interroger l'API
+            # On utilise l'ID trouvé pour interroger l'API
+            logger.info(f"Récupération page {page} pour l'ID {user_id}...")
             tours_url = f"https://www.komoot.com/api/v1/users/{user_id}/tours/?type=tour_recorded&status=public&limit=50&page={page}"
             resp = session.get(tours_url)
             
+            if resp.status_code == 404:
+                 logger.error("L'ID trouvé semble invalide pour l'API (404).")
+                 break
+            
             if resp.status_code != 200:
-                logger.error(f"Erreur API ({resp.status_code}) à la page {page}.")
+                logger.error(f"Erreur API ({resp.status_code}).")
                 break
             
             tours = resp.json().get('_embedded', {}).get('tours', [])
-            if not tours: break
+            if not tours: 
+                logger.info("Fin de la liste des sorties.")
+                break
 
             for tour in tours:
-                gpx_url = f"https://www.komoot.com/api/v1/tours/{tour['id']}.gpx"
-                gpx_res = session.get(gpx_url)
+                gpx_res = session.get(f"https://www.komoot.com/api/v1/tours/{tour['id']}.gpx")
                 if gpx_res.status_code == 200:
                     try:
                         gpx = gpxpy.parse(gpx_res.text)
@@ -84,8 +110,6 @@ def run_sync():
                                     all_points.append([p.latitude, p.longitude])
                     except: continue
                 time.sleep(0.05)
-            
-            logger.info(f"Page {page} traitée.")
             page += 1
 
         if all_points:
@@ -94,10 +118,9 @@ def run_sync():
             m = folium.Map(location=[avg_lat, avg_lon], zoom_start=11, tiles='CartoDB dark_matter')
             HeatMap(all_points, radius=4, blur=2, min_opacity=0.4, gradient={0.4:'blue', 0.7:'cyan', 1:'white'}).add_to(m)
             
-            # HTML Dashboard
             m.get_root().html.add_child(folium.Element(f'''
                 <div style="position:fixed; top:10px; left:50px; z-index:1000; background:rgba(20,20,20,0.9); color:white; padding:15px; border-radius:10px; border:1px solid #00f2ff; font-family:sans-serif;">
-                    <h2 style="margin:0; font-size:16px; color:#00f2ff;">KOMOOT SQUADRA</h2>
+                    <h2 style="margin:0; font-size:16px; color:#00f2ff;">SQUADRA MAP</h2>
                     <p>{count} sorties | {round(total_dist/1000)} km | {int(total_elev)}m D+</p>
                 </div>
                 <button onclick="triggerUpdate()" style="position:fixed; top:10px; right:10px; z-index:1000; background:#1a1a1a; color:#00f2ff; border:1px solid #00f2ff; padding:10px; cursor:pointer; border-radius:5px;">🔄 UPDATE</button>
@@ -112,9 +135,9 @@ def run_sync():
                 </script>
             '''))
             m.save("index.html")
-            logger.info("Fichier index.html généré avec succès !")
+            logger.info("🎉 SUCCÈS : index.html généré !")
         else:
-            logger.warning("Connexion réussie mais aucune trace GPS trouvée.")
+            logger.warning("Connexion OK, ID trouvé, mais aucune sortie publique récupérée.")
 
     except Exception as e:
         logger.error(f"Erreur : {e}")
