@@ -6,7 +6,7 @@ import logging
 import json
 import math
 import time
-from folium.plugins import HeatMap, Fullscreen
+from folium.plugins import Fullscreen
 from datetime import datetime
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -55,7 +55,8 @@ def load_existing_data():
         try:
             with open(DATA_FILE, 'r') as f: return json.load(f)
         except: pass
-    return {"points": [], "tour_ids": [], "last_tours": [], "stats": {"dist": 0, "count": 0}}
+    # On stocke maintenant des listes de lignes (traces) au lieu de points isolés
+    return {"traces": [], "tour_ids": [], "last_tours": [], "stats": {"dist": 0, "count": 0}}
 
 def run_sync():
     if not USER_ID or not SESSION_COOKIE: return
@@ -81,60 +82,68 @@ def run_sync():
         for tour in tours_data:
             t_id = str(tour['id'])
             if t_id not in storage["tour_ids"]:
+                logger.info(f"Sync tour : {t_id}")
                 res_gpx = session.get(f"https://www.komoot.com/api/v1/tours/{t_id}.gpx")
                 if res_gpx.status_code == 200:
                     gpx = gpxpy.parse(res_gpx.text)
                     storage["tour_ids"].append(t_id)
                     storage["stats"]["count"] += 1
+                    
+                    # On extrait chaque segment comme une ligne continue
                     for track in gpx.tracks:
                         for seg in track.segments:
-                            for p in seg.points: storage["points"].append([round(p.latitude, 5), round(p.longitude, 5)])
+                            # Simplification : on ne garde qu'un point sur 3 pour alléger
+                            line = [[round(p.latitude, 5), round(p.longitude, 5)] for p in seg.points[::3]]
+                            if len(line) > 1:
+                                storage["traces"].append(line)
                 time.sleep(0.05)
 
-    if storage["points"]:
-        # --- CARTE STYLE KOMOOT PLAN ---
-        # On utilise le serveur de tuiles OSM.de qui est très proche du style Komoot
+    if storage.get("traces"):
+        # CARTE STYLE KOMOOT
         m = folium.Map(location=[46.5, 2.2], zoom_start=6, 
                        tiles='https://{s}.tile.openstreetmap.de/tiles/osmde/{z}/{x}/{y}.png', 
-                       attr='&copy; OpenStreetMap contributors (Style Komoot-like)')
+                       attr='&copy; OpenStreetMap contributors')
         
         Fullscreen(position='topleft').add_to(m)
 
-        # TUILES
-        visited_tiles = set(get_tile_coords(p[0], p[1]) for p in storage["points"])
+        # 1. TUILES (CARRÉS) - On calcule les tuiles à partir des traces
+        visited_tiles = set()
+        for trace in storage["traces"]:
+            for p in trace:
+                visited_tiles.add(get_tile_coords(p[0], p[1]))
+        
         max_cluster = calculate_max_cluster(visited_tiles)
+        
         for tile in visited_tiles:
             folium.Rectangle(bounds=get_tile_rect(tile[0], tile[1]), 
-                             color='#7ED321', # Vert Komoot
-                             fill=True, fill_opacity=0.2, weight=1).add_to(m)
+                             color='#7ED321', fill=True, fill_opacity=0.15, weight=0.5).add_to(m)
 
-        # HEATMAP (Couleurs sobres pour carte claire)
-        HeatMap(storage["points"], radius=4, blur=3, min_opacity=0.3, 
-                gradient={0.4: '#4A90E2', 1: '#D0021B'}).add_to(m)
+        # 2. TRACÉS (LIGNES) - Beaucoup plus fluide que la Heatmap
+        for trace in storage["traces"]:
+            folium.PolyLine(trace, color='#D0021B', weight=2, opacity=0.6).add_to(m)
 
-        # STATS MENSUELLES
+        # DASHBOARD
         h, m_time = int(month_time_sec // 3600), int((month_time_sec % 3600) // 60)
         tours_html = "".join([f"<div style='border-bottom:1px solid #eee; padding:5px 0;'><b>{t['name']}</b><br><small>{t['date']} - {t['dist']}km</small></div>" for t in storage["last_tours"]])
         
         sidebar_html = f'''
-        <div id="sidebar" style="position:fixed; top:10px; right:10px; width:220px; z-index:1000; background:white; color:#333; padding:15px; border-radius:10px; font-family:sans-serif; border:1px solid #ddd; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
-            <div style="text-align:center; margin-bottom:10px;"><img src="https://upload.wikimedia.org/wikipedia/commons/e/e3/Komoot_logo.png" style="width:80px;"></div>
+        <div id="sidebar" style="position:fixed; top:10px; right:10px; width:220px; z-index:1000; background:white; color:#333; padding:15px; border-radius:10px; font-family:sans-serif; border:1px solid #ddd; box-shadow: 0 2px 10px rgba(0,0,0,0.1); font-size:12px;">
+            <div style="text-align:center; margin-bottom:10px;"><b style="color:#7ED321; font-size:16px;">SQUADRA MAP</b></div>
             <div style="background:#f0f7e7; padding:10px; border-radius:8px; margin-bottom:10px; border:1px solid #7ED321;">
                 <b style="font-size:10px; color:#5a9616;">BILAN {datetime.now().strftime('%B').upper()}</b><br>
                 <b style="font-size:15px;">{round(month_dist/1000, 1)} km</b><br>
                 <small>{h}h {m_time}min en selle</small>
             </div>
-            <div style="display:flex; justify-content:space-around; margin-bottom:10px; text-align:center; font-size:12px;">
-                <div><b>{len(visited_tiles)}</b><br>Tiles</div>
-                <div><b>{max_cluster}</b><br>Cluster</div>
-                <div><b>{storage["stats"]["count"]}</b><br>Tours</div>
+            <div style="display:flex; justify-content:space-around; margin-bottom:10px; text-align:center;">
+                <div><b>{len(visited_tiles)}</b><br><small>Tiles</small></div>
+                <div><b>{max_cluster}</b><br><small>Cluster</small></div>
+                <div><b>{storage["stats"]["count"]}</b><br><small>Tours</small></div>
             </div>
-            <div style="font-size:11px; border-top:1px solid #eee; pt:10px;">
-                <b style="color:#999;">DERNIERS PARCOURS</b>
-                {tours_html}
+            <div style="border-top:1px solid #eee; padding-top:10px;">
+                <b style="color:#999; font-size:10px;">DERNIERS PARCOURS</b>
+                <div style="max-height:150px; overflow-y:auto;">{tours_html}</div>
             </div>
         </div>
-        <style>@media (max-width: 600px) {{ #sidebar {{ width: 150px !important; font-size: 10px !important; }} }}</style>
         '''
         m.get_root().html.add_child(folium.Element(sidebar_html))
         
