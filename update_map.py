@@ -4,6 +4,7 @@ import gpxpy
 import folium
 import logging
 import json
+import math
 import time
 from folium.plugins import HeatMap
 
@@ -14,70 +15,119 @@ USER_ID = os.getenv("KOMOOT_USER_ID")
 SESSION_COOKIE = os.getenv("KOMOOT_SESSION_COOKIE")
 DATA_FILE = "all_points.json"
 
+def get_tile_coords(lat, lon, zoom=14):
+    lat_rad = math.radians(lat)
+    n = 2.0 ** zoom
+    xtile = int((lon + 180.0) / 360.0 * n)
+    ytile = int((1.0 - math.log(math.tan(lat_rad) + (1 / math.cos(lat_rad))) / math.pi) / 2.0 * n)
+    return xtile, ytile
+
+def get_tile_rect(xtile, ytile, zoom=14):
+    n = 2.0 ** zoom
+    def f(x, y):
+        lon = x / n * 360.0 - 180.0
+        lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
+        return [lat, lon]
+    return [f(xtile, ytile), f(xtile + 1, ytile + 1)]
+
+def calculate_max_cluster(tiles_set):
+    """Calcule la taille du plus grand groupe de tuiles connectées."""
+    if not tiles_set: return 0
+    visited = set()
+    max_cluster = 0
+    tiles_list = list(tiles_set)
+    
+    for tile in tiles_list:
+        if tile not in visited:
+            # Nouveau groupe trouvé (BFS)
+            cluster_size = 0
+            queue = [tile]
+            visited.add(tile)
+            while queue:
+                curr = queue.pop(0)
+                cluster_size += 1
+                # Check les 4 voisins directs
+                for dx, dy in [(0,1), (0,-1), (1,0), (-1,0)]:
+                    neighbor = (curr[0]+dx, curr[1]+dy)
+                    if neighbor in tiles_set and neighbor not in visited:
+                        visited.add(neighbor)
+                        queue.append(neighbor)
+            max_cluster = max(max_cluster, cluster_size)
+    return max_cluster
+
 def load_existing_data():
     if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, 'r') as f:
-                return json.load(f)
-        except: pass
-    return {"points": [], "tour_ids": [], "stats": {"dist": 0, "elev": 0, "count": 0}}
+        with open(DATA_FILE, 'r') as f: return json.load(f)
+    return {"points": [], "tour_ids": [], "last_tours": [], "stats": {"dist": 0, "count": 0}}
 
 def run_sync():
-    if not USER_ID or not SESSION_COOKIE:
-        logger.error("Secrets manquants (ID ou Cookie).")
-        return
-    
     session = requests.Session()
-    # On injecte le cookie de session manuellement
     session.cookies.set('komoot_session', SESSION_COOKIE, domain='.komoot.com')
-    
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-        'Accept': 'application/json'
-    })
-    
     storage = load_existing_data()
     
-    # On utilise l'URL que tu as trouvée
-    url = f"https://www.komoot.com/api/v007/users/{USER_ID}/tours/?type=tour_recorded&sort_field=date&sort_direction=desc&limit=100"
+    # Récupération des dernières sorties pour le dashboard
+    url = f"https://www.komoot.com/api/v007/users/{USER_ID}/tours/?type=tour_recorded&sort_field=date&sort_direction=desc&limit=20"
+    resp = session.get(url, headers={'User-Agent': 'Mozilla/5.0'})
     
-    try:
-        resp = session.get(url)
-        if resp.status_code != 200:
-            logger.error(f"Erreur API {resp.status_code}. Le cookie est peut-être expiré.")
-            return
-
-        tours = resp.json().get('_embedded', {}).get('tours', [])
-        new_count = 0
-
-        for tour in tours:
+    if resp.status_code == 200:
+        tours_data = resp.json().get('_embedded', {}).get('tours', [])
+        # On garde les 5 dernières pour l'affichage
+        storage["last_tours"] = [{"name": t["name"], "date": t["date"][:10], "dist": round(t["distance"]/1000, 1)} for t in tours_data[:5]]
+        
+        for tour in tours_data:
             t_id = str(tour['id'])
             if t_id not in storage["tour_ids"]:
-                logger.info(f"Téléchargement : {tour['name']}")
+                logger.info(f"Nouveau tour : {t_id}")
                 res_gpx = session.get(f"https://www.komoot.com/api/v1/tours/{t_id}.gpx")
                 if res_gpx.status_code == 200:
                     gpx = gpxpy.parse(res_gpx.text)
-                    storage["stats"]["dist"] += gpx.length_2d()
-                    storage["stats"]["count"] += 1
                     storage["tour_ids"].append(t_id)
+                    storage["stats"]["count"] += 1
+                    storage["stats"]["dist"] += gpx.length_2d()
                     for track in gpx.tracks:
                         for seg in track.segments:
                             for p in seg.points:
                                 storage["points"].append([round(p.latitude, 5), round(p.longitude, 5)])
-                    new_count += 1
-                    time.sleep(0.1)
+                time.sleep(0.1)
 
-        if new_count > 0 or not os.path.exists(DATA_FILE):
-            with open(DATA_FILE, 'w') as f: json.dump(storage, f)
-            
-        if storage["points"]:
-            m = folium.Map(location=storage["points"][-1], zoom_start=11, tiles='CartoDB dark_matter')
-            HeatMap(storage["points"], radius=3, blur=2).add_to(m)
-            m.save("index.html")
-            logger.info("✅ Carte mise à jour avec succès.")
+    if storage["points"]:
+        m = folium.Map(location=[46.5, 2.5], zoom_start=6, 
+                       tiles='https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
+                       attr='OpenStreetMap France')
 
-    except Exception as e:
-        logger.error(f"Erreur : {e}")
+        visited_tiles = set(get_tile_coords(p[0], p[1]) for p in storage["points"])
+        max_cluster = calculate_max_cluster(visited_tiles)
+
+        for tile in visited_tiles:
+            folium.Rectangle(bounds=get_tile_rect(tile[0], tile[1]), 
+                             color='#00f2ff', fill=True, fill_opacity=0.3, weight=1).add_to(m)
+
+        HeatMap(storage["points"], radius=3, blur=2).add_to(m)
+
+        # Dashboard Latéral HTML/CSS
+        tours_html = "".join([f"<div style='border-bottom:1px solid #444; padding:5px 0;'><b>{t['name']}</b><br><small>{t['date']} - {t['dist']}km</small></div>" for t in storage["last_tours"]])
+        
+        custom_style = f'''
+        <div style="position:fixed; top:20px; right:20px; width:220px; z-index:1000; background:rgba(30,30,30,0.9); color:white; padding:20px; border-radius:15px; font-family:sans-serif; border:1px solid #00f2ff; backdrop-filter: blur(5px);">
+            <h3 style="margin:0 0 15px 0; color:#00f2ff; border-bottom:2px solid #00f2ff;">EXPLORATION</h3>
+            <div style="margin-bottom:15px;">
+                <span style="font-size:24px; font-weight:bold;">{len(visited_tiles)}</span> Tuiles<br>
+                <span style="color:#00f2ff;">Max Cluster : <b>{max_cluster}</b></span>
+            </div>
+            <div style="font-size:12px;">
+                <b style="text-transform:uppercase; color:#aaa;">5 Dernières sorties :</b>
+                {tours_html}
+            </div>
+            <div style="margin-top:15px; font-size:11px; text-align:center; color:#666;">
+                Mise à jour : {datetime.now().strftime('%d/%m/%Y')}
+            </div>
+        </div>
+        '''
+        m.get_root().html.add_child(folium.Element(custom_style))
+        
+        with open(DATA_FILE, 'w') as f: json.dump(storage, f)
+        m.save("index.html")
 
 if __name__ == "__main__":
+    from datetime import datetime
     run_sync()
