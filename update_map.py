@@ -12,8 +12,8 @@ logger = logging.getLogger()
 
 EMAIL = os.getenv("KOMOOT_EMAIL")
 PASSWORD = os.getenv("KOMOOT_PASSWORD")
-REPO_OWNER = "VOTRE_PSEUDO_GITHUB" # <--- VÉRIFIEZ BIEN CECI
-REPO_NAME = "VOTRE_NOM_DE_DEPOT"   # <--- VÉRIFIEZ BIEN CECI
+REPO_OWNER = "CyrilHussenet" # <--- VÉRIFIEZ BIEN CECI
+REPO_NAME = "squamoot"   # <--- VÉRIFIEZ BIEN CECI
 
 def run_sync():
     session = requests.Session()
