@@ -18,8 +18,8 @@ logger = logging.getLogger()
 # Configuration (Secrets GitHub)
 EMAIL = os.getenv("KOMOOT_EMAIL")
 PASSWORD = os.getenv("KOMOOT_PASSWORD")
-REPO_OWNER = "VOTRE_NOM_UTILISATEUR_GITHUB" # À REMPLACER
-REPO_NAME = "VOTRE_NOM_DE_DEPOT"           # À REMPLACER
+REPO_OWNER = "CyrilHussenet" # À REMPLACER
+REPO_NAME = "squamoot"           # À REMPLACER
 
 def run_sync():
     if not EMAIL or not PASSWORD:
