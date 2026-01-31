@@ -63,18 +63,14 @@ def run_sync():
     session.cookies.set('komoot_session', SESSION_COOKIE, domain='.komoot.com')
     storage = load_existing_data()
     
-    # Init stats mensuelles
     current_month = datetime.now().strftime("%Y-%m")
-    month_dist = 0
-    month_time_sec = 0
+    month_dist, month_time_sec = 0, 0
     
     url = f"https://www.komoot.com/api/v007/users/{USER_ID}/tours/?type=tour_recorded&sort_field=date&sort_direction=desc&limit=50"
     resp = session.get(url, headers={'User-Agent': 'Mozilla/5.0'})
     
     if resp.status_code == 200:
         tours_data = resp.json().get('_embedded', {}).get('tours', [])
-        
-        # Calcul des stats du mois sur les tours reçus
         for t in tours_data:
             if t['date'].startswith(current_month):
                 month_dist += t['distance']
@@ -96,54 +92,49 @@ def run_sync():
                 time.sleep(0.05)
 
     if storage["points"]:
-        # 1. CARTE (Satellite + Labels FR)
-        m = folium.Map(location=[46.5, 2.2], zoom_start=6, tiles=None)
-        folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Satellite').add_to(m)
-        folium.TileLayer('https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png', attr='OSM FR', name='Labels', overlay=True, opacity=0.8).add_to(m)
-        Fullscreen().add_to(m)
+        # --- CARTE STYLE KOMOOT PLAN ---
+        # On utilise le serveur de tuiles OSM.de qui est très proche du style Komoot
+        m = folium.Map(location=[46.5, 2.2], zoom_start=6, 
+                       tiles='https://{s}.tile.openstreetmap.de/tiles/osmde/{z}/{x}/{y}.png', 
+                       attr='&copy; OpenStreetMap contributors (Style Komoot-like)')
+        
+        Fullscreen(position='topleft').add_to(m)
 
-        # 2. TUILES
+        # TUILES
         visited_tiles = set(get_tile_coords(p[0], p[1]) for p in storage["points"])
         max_cluster = calculate_max_cluster(visited_tiles)
         for tile in visited_tiles:
-            folium.Rectangle(bounds=get_tile_rect(tile[0], tile[1]), color='#FFFF00', fill=True, fill_opacity=0.3, weight=1).add_to(m)
+            folium.Rectangle(bounds=get_tile_rect(tile[0], tile[1]), 
+                             color='#7ED321', # Vert Komoot
+                             fill=True, fill_opacity=0.2, weight=1).add_to(m)
 
-        # 3. HEATMAP
-        HeatMap(storage["points"], radius=3, blur=2, min_opacity=0.4, gradient={0.4: 'red', 1: 'yellow'}).add_to(m)
+        # HEATMAP (Couleurs sobres pour carte claire)
+        HeatMap(storage["points"], radius=4, blur=3, min_opacity=0.3, 
+                gradient={0.4: '#4A90E2', 1: '#D0021B'}).add_to(m)
 
-        # Conversion temps mensuel
-        h = int(month_time_sec // 3600)
-        m_time = int((month_time_sec % 3600) // 60)
-
-        # Dashboard Responsive (Correction Mobile)
+        # STATS MENSUELLES
+        h, m_time = int(month_time_sec // 3600), int((month_time_sec % 3600) // 60)
         tours_html = "".join([f"<div style='border-bottom:1px solid #eee; padding:5px 0;'><b>{t['name']}</b><br><small>{t['date']} - {t['dist']}km</small></div>" for t in storage["last_tours"]])
         
         sidebar_html = f'''
-        <div id="sidebar" style="position:fixed; top:10px; right:10px; width:220px; z-index:1000; background:rgba(255,255,255,0.95); color:#222; padding:15px; border-radius:12px; font-family:sans-serif; border:2px solid #FFFF00; box-shadow: 0 4px 15px rgba(0,0,0,0.2); font-size: 13px;">
-            <h3 style="margin:0 0 10px 0; text-align:center; font-size:16px;">SQUADRA DASHBOARD</h3>
-            
-            <div style="background:#f9f9f9; padding:10px; border-radius:8px; margin-bottom:10px; border-left:4px solid #FFFF00;">
-                <b style="font-size:11px; color:#666;">CE MOIS ({datetime.now().strftime('%B')})</b><br>
-                <b>{round(month_dist/1000, 1)} km</b> | <b>{h}h {m_time}min</b>
+        <div id="sidebar" style="position:fixed; top:10px; right:10px; width:220px; z-index:1000; background:white; color:#333; padding:15px; border-radius:10px; font-family:sans-serif; border:1px solid #ddd; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+            <div style="text-align:center; margin-bottom:10px;"><img src="https://upload.wikimedia.org/wikipedia/commons/e/e3/Komoot_logo.png" style="width:80px;"></div>
+            <div style="background:#f0f7e7; padding:10px; border-radius:8px; margin-bottom:10px; border:1px solid #7ED321;">
+                <b style="font-size:10px; color:#5a9616;">BILAN {datetime.now().strftime('%B').upper()}</b><br>
+                <b style="font-size:15px;">{round(month_dist/1000, 1)} km</b><br>
+                <small>{h}h {m_time}min en selle</small>
             </div>
-
-            <div style="display:flex; justify-content:space-around; margin-bottom:10px; text-align:center; font-weight:bold;">
-                <div>{len(visited_tiles)}<br><small style="font-size:9px;">TUILES</small></div>
-                <div>{max_cluster}<br><small style="font-size:9px;">CLUSTER</small></div>
-                <div>{storage["stats"]["count"]}<br><small style="font-size:9px;">TOURS</small></div>
+            <div style="display:flex; justify-content:space-around; margin-bottom:10px; text-align:center; font-size:12px;">
+                <div><b>{len(visited_tiles)}</b><br>Tiles</div>
+                <div><b>{max_cluster}</b><br>Cluster</div>
+                <div><b>{storage["stats"]["count"]}</b><br>Tours</div>
             </div>
-
-            <div style="border-top:1px solid #ddd; padding-top:10px;">
-                <b style="font-size:10px; color:#666;">5 DERNIÈRES SORTIES</b>
-                <div style="max-height:150px; overflow-y:auto; font-size:11px;">{tours_html}</div>
+            <div style="font-size:11px; border-top:1px solid #eee; pt:10px;">
+                <b style="color:#999;">DERNIERS PARCOURS</b>
+                {tours_html}
             </div>
         </div>
-        <style>
-            @media (max-width: 600px) {{
-                #sidebar {{ width: 160px !important; padding: 10px !important; font-size: 11px !important; }}
-                h3 {{ font-size: 12px !important; }}
-            }}
-        </style>
+        <style>@media (max-width: 600px) {{ #sidebar {{ width: 150px !important; font-size: 10px !important; }} }}</style>
         '''
         m.get_root().html.add_child(folium.Element(sidebar_html))
         
