@@ -25,17 +25,16 @@ jobs:
       - name: Run script
         env:
           KOMOOT_USER_ID: ${{ secrets.KOMOOT_USER_ID }}
+          KOMOOT_SESSION_COOKIE: ${{ secrets.KOMOOT_SESSION_COOKIE }}
         run: python update_map.py
 
       - name: Commit and push changes
         run: |
           git config --global user.name "Bot Carte"
           git config --global user.email "bot@github.com"
-          # On met de côté les changements pour faire un pull propre
-          git add .
-          git stash
+          git add index.html
+          # On n'ajoute all_points.json que s'il existe
+          if [ -f all_points.json ]; then git add all_points.json; fi
           git pull --rebase origin main
-          git stash pop || echo "Rien à restaurer"
-          git add index.html all_points.json
-          git commit -m "Auto-update map data" || exit 0
+          git commit -m "Auto-update map" || exit 0
           git push origin main
