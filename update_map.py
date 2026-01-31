@@ -86,7 +86,7 @@ def run_sync():
         while True:
             logger.info(f"Récupération traces pour ID {user_id} (Page {page})...")
             # API endpoint
-            tours_url = f"https://www.komoot.com/api/v1/users/{user_id}/tours/?type=tour_recorded&status=public&limit=50&page={page}"
+            tours_url = f"https://www.komoot.com/api/v007/users/{user_id}/tours/?type=tour_recorded&status=public&limit=50&page={page}"
             resp = session.get(tours_url)
             
             if resp.status_code == 404:
@@ -99,7 +99,7 @@ def run_sync():
                 break
 
             for tour in tours:
-                gpx_res = session.get(f"https://www.komoot.com/api/v1/tours/{tour['id']}.gpx")
+                gpx_res = session.get(f"https://www.komoot.com/api/v007/tours/{tour['id']}.gpx")
                 if gpx_res.status_code == 200:
                     try:
                         gpx = gpxpy.parse(gpx_res.text)
