@@ -21,8 +21,8 @@ logger = logging.getLogger()
 # Configuration (Secrets GitHub)
 USER_ID = os.getenv("KOMOOT_USER_ID")
 SESSION_COOKIE = os.getenv("KOMOOT_SESSION_COOKIE")
-REPO_OWNER = os.getenv("GITHUB_REPO_OWNER", "VOTRE_NOM_UTILISATEUR_GITHUB")
-REPO_NAME = os.getenv("GITHUB_REPO_NAME", "VOTRE_NOM_DE_DEPOT")
+REPO_OWNER = os.getenv("REPO_OWNER", "VOTRE_NOM_UTILISATEUR_GITHUB")
+REPO_NAME = os.getenv("REPO_NAME", "VOTRE_NOM_DE_DEPOT")
 
 # Configuration de l'affichage
 DATA_FILE = "all_points.json"
