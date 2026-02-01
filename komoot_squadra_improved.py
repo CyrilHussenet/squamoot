@@ -124,22 +124,33 @@ def save_data(storage):
 
 
 def get_session_with_retry(max_retries=3):
-    """Crée une session avec des headers complets pour éviter le blocage 403"""
+    """Crée une session 'Stealth' qui imite parfaitement Chrome pour passer le WAF Komoot"""
     session = requests.Session()
     
-    # Nettoyage du cookie si l'utilisateur a collé "komoot_session=..." entier
-    cookie_val = SESSION_COOKIE.strip()
+    # Nettoyage et vérification du cookie
+    cookie_val = SESSION_COOKIE.strip() if SESSION_COOKIE else ""
     if "komoot_session=" in cookie_val:
         cookie_val = cookie_val.split("komoot_session=")[1].split(";")[0]
+    
+    if not cookie_val:
+        logger.error("❌ Le cookie SESSION_COOKIE est vide ou mal configuré.")
+        return None
 
-    # HEADERS COMPLETS (Indispensable pour éviter l'erreur 403)
-    # On injecte le cookie directement dans le header pour être sûr qu'il passe
+    # HEADERS AVANCÉS (Mimétisme Chrome complet)
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Referer': f'https://www.komoot.com/user/{USER_ID}',  # Très important pour Komoot
+        'Referer': f'https://www.komoot.com/user/{USER_ID}/tours',
         'Origin': 'https://www.komoot.com',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin',
+        'sec-ch-ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
         'Cookie': f'komoot_session={cookie_val}'
     }
     
@@ -147,28 +158,30 @@ def get_session_with_retry(max_retries=3):
     
     for attempt in range(max_retries):
         try:
-            # Test de la session
+            logger.info(f"⏳ Tentative de connexion {attempt + 1}/{max_retries}...")
+            
+            # On teste sur l'API user profile d'abord (souvent moins protégée que /tours)
             test_url = f"https://www.komoot.com/api/v007/users/{USER_ID}/tours/?limit=1"
-            response = session.get(test_url, timeout=10)
+            
+            response = session.get(test_url, timeout=15)
             
             if response.status_code == 200:
-                logger.info(f"✓ Session validée pour l'utilisateur {USER_ID}")
+                logger.info(f"✓ Session validée et connectée !")
                 return session
-            elif response.status_code == 401:
-                logger.error("❌ Cookie de session invalide ou expiré (401)")
-                return None
             elif response.status_code == 403:
-                logger.warning(f"⚠️ 403 Forbidden (Tentative {attempt + 1}) - Le cookie est peut-être bon mais Komoot bloque le script.")
+                logger.warning(f"⚠️ 403 Forbidden - Komoot bloque encore. Vérifiez que le cookie n'est pas expiré.")
+            elif response.status_code == 401:
+                logger.error("❌ 401 Unauthorized - Le cookie est invalide ou expiré. Il faut en récupérer un nouveau.")
+                return None
             else:
-                logger.warning(f"Réponse inattendue: {response.status_code}")
+                logger.warning(f"Statut inattendu: {response.status_code}")
                 
         except requests.exceptions.RequestException as e:
-            logger.warning(f"Tentative {attempt + 1}/{max_retries} échouée: {e}")
+            logger.warning(f"Erreur réseau: {e}")
         
-        # Attente avant nouvel essai
-        if attempt < max_retries - 1:
-            time.sleep(2 + attempt)
+        time.sleep(3 + attempt)  # Pause plus longue entre les essais
     
+    logger.error("❌ Échec de la connexion après plusieurs tentatives.")
     return None
 
 def fetch_tours_page(session, sort_direction='desc', limit=50):
