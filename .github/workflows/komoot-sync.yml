@@ -172,14 +172,7 @@ jobs:
               echo "## 📊 Statistiques" >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
               echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-              python3 -c "
-import json
-with open('all_points.json') as f:
-    data = json.load(f)
-    print(f\"Tours synchronisés: {data['stats']['count']}\")
-    print(f\"Traces stockées: {len(data['traces'])}\")
-    print(f\"Derniers tours: {len(data.get('last_tours', []))}\")
-" >> $GITHUB_STEP_SUMMARY
+              python3 -c 'import json; data=json.load(open("all_points.json")); print(f"Tours synchronisés: {data[\"stats\"][\"count\"]}"); print(f"Traces stockées: {len(data[\"traces\"])}"); print(f"Derniers tours: {len(data.get(\"last_tours\", []))}")' >> $GITHUB_STEP_SUMMARY
               echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
             fi
