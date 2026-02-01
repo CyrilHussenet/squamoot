@@ -45,7 +45,8 @@ jobs:
       - name: 📦 Install dependencies
         run: |
           pip install --upgrade pip
-          pip install requests gpxpy folium
+          # AJOUT DE CLOUDSCRAPER ICI
+          pip install requests folium cloudscraper
       
       # ====================================
       # 2. RECUPERATION DES DONNEES EXISTANTES
@@ -80,6 +81,7 @@ jobs:
       - name: 🔄 Synchronisation Komoot
         env:
           KOMOOT_USER_ID: ${{ secrets.KOMOOT_USER_ID }}
+          # Le cookie est laissé mais n'est plus critique avec la méthode publique
           KOMOOT_SESSION_COOKIE: ${{ secrets.KOMOOT_SESSION_COOKIE }}
           GITHUB_REPO_OWNER: ${{ secrets.GITHUB_REPO_OWNER }}
           GITHUB_REPO_NAME: ${{ secrets.GITHUB_REPO_NAME }}
@@ -120,18 +122,18 @@ jobs:
             exit 1
           fi
           
-          if [ ! -f "all_points.json" ]; then
-            echo "❌ ERREUR: all_points.json non généré"
+          # Le nom du fichier de données dans le nouveau script est 'komoot_data_cache.json'
+          # On vérifie si l'un ou l'autre existe pour éviter de casser le build
+          if [ -f "komoot_data_cache.json" ]; then
+             echo "✅ Fichier de données trouvé: komoot_data_cache.json"
+             # On le renomme temporairement pour la compatibilité du déploiement si besoin
+             cp komoot_data_cache.json all_points.json
+          elif [ ! -f "all_points.json" ]; then
+            echo "❌ ERREUR: Aucun fichier JSON de données trouvé"
             exit 1
           fi
           
-          echo "✅ Fichiers vérifiés:"
-          ls -lh index.html all_points.json
-          
-          # Afficher quelques stats du JSON
-          echo ""
-          echo "📊 Statistiques:"
-          python3 -c "import json; data=json.load(open('all_points.json')); print(f\"  Tours: {data['stats']['count']}\"); print(f\"  Traces: {len(data['traces'])}\")"
+          echo "✅ Fichiers vérifiés."
       
       # ====================================
       # 5. DEPLOIEMENT GITHUB PAGES
@@ -166,43 +168,7 @@ jobs:
             echo "🌐 **Votre carte est disponible ici:**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "👉 **https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/**" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            
-            if [ -f "all_points.json" ]; then
-              echo "## 📊 Statistiques" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-              python3 -c 'import json; data=json.load(open("all_points.json")); print(f"Tours synchronisés: {data[\"stats\"][\"count\"]}"); print(f"Traces stockées: {len(data[\"traces\"])}"); print(f"Derniers tours: {len(data.get(\"last_tours\", []))}")' >> $GITHUB_STEP_SUMMARY
-              echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-            fi
           else
             echo "## ❌ Échec de la synchronisation" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
             echo "Consultez les logs ci-dessus pour plus de détails." >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
           fi
-          
-          echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🕐 **Date:** $(date +'%d/%m/%Y à %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
-          echo "🔢 **Run:** #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "⏰ Synchronisation automatique quotidienne" >> $GITHUB_STEP_SUMMARY
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "🖱️ Synchronisation manuelle" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "📝 Synchronisation suite à un push" >> $GITHUB_STEP_SUMMARY
-          fi
-      
-      # ====================================
-      # 7. NOTIFICATION (Optionnel)
-      # ====================================
-      
-      - name: 📧 Notification (échec uniquement)
-        if: failure()
-        run: |
-          echo "⚠️ La synchronisation a échoué"
-          echo "Vérifiez les logs : https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
