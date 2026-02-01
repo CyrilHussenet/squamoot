@@ -18,7 +18,7 @@ logger = logging.getLogger()
 USER_ID = os.getenv("KOMOOT_USER_ID") # Votre ID numérique (ex: 123456789)
 
 # Paramètres Carte
-DATA_FILE = "komoot_data_cache.json"
+DATA_FILE = "all_points.json"
 SIMPLIFY_FACTOR = int(os.getenv("SIMPLIFY_FACTOR", "2"))  # Réduire les points pour alléger
 TILE_ZOOM = 14
 TILE_COLOR = os.getenv("TILE_COLOR", "#7ED321")
