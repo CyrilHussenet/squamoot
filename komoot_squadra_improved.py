@@ -112,12 +112,17 @@ def load_data():
                     data["tours_processed"] = data.get("tour_ids", [])
                 if "tiles" not in data:
                     data["tiles"] = []
+                # Sécurité : on s'assure que 'traces' existe même dans un vieux fichier
                 if "traces" not in data:
                     data["traces"] = []
+                if "stats" not in data:
+                    data["stats"] = {"count": 0}
                 return data
         except Exception:
             pass
-    return {"tours_processed": [], "points": [], "tiles": [], "stats": {"count": 0}}
+    
+    # C'EST ICI QUE C'ÉTAIT MANQUANT : ajout de "traces": []
+    return {"tours_processed": [], "traces": [], "tiles": [], "stats": {"count": 0}}
 
 def save_data(data):
     with open(DATA_FILE, 'w') as f:
