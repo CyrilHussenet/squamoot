@@ -181,30 +181,36 @@ def update_database(user_id):
 # ==========================================
 
 def create_map(db):
-    if not db["tiles"]:
-        logger.warning("⚠️ Aucune donnée tile à afficher.")
-        return
+    # On définit un centre par défaut (Paris) si vide
+    start_loc = [48.8566, 2.3522]
+    
+    # Si on a des traces, on centre dessus
+    if db.get("traces"):
+        start_loc = db["traces"][-1][0]
+    
+    logger.info(f"🗺️ Génération de la carte (Centrée sur {start_loc})...")
 
-    start_loc = db["traces"][-1][0] if db["traces"] else [48.8566, 2.3522]
     m = folium.Map(location=start_loc, zoom_start=12, tiles="CartoDB dark_matter")
     Fullscreen().add_to(m)
 
-    # Tiles
-    for xtile, ytile in db["tiles"]:
-        nw = num2deg(xtile, ytile, TILE_ZOOM)
-        se = num2deg(xtile + 1, ytile + 1, TILE_ZOOM)
-        folium.Rectangle(
-            bounds=[[nw[0], nw[1]], [se[0], se[1]]],
-            color=None, fill=True, fill_color=TILE_COLOR, fill_opacity=0.3, weight=0
-        ).add_to(m)
+    # Tiles (si existantes)
+    if db.get("tiles"):
+        for xtile, ytile in db["tiles"]:
+            nw = num2deg(xtile, ytile, TILE_ZOOM)
+            se = num2deg(xtile + 1, ytile + 1, TILE_ZOOM)
+            folium.Rectangle(
+                bounds=[[nw[0], nw[1]], [se[0], se[1]]],
+                color=None, fill=True, fill_color=TILE_COLOR, fill_opacity=0.3, weight=0
+            ).add_to(m)
 
-    # Traces
-    for trace in db["traces"]:
-        if len(trace) > 1:
-            folium.PolyLine(trace, color=TRACE_COLOR, weight=2, opacity=0.6).add_to(m)
+    # Traces (si existantes)
+    if db.get("traces"):
+        for trace in db["traces"]:
+            if len(trace) > 1:
+                folium.PolyLine(trace, color=TRACE_COLOR, weight=2, opacity=0.6).add_to(m)
 
     m.save("index.html")
-    logger.info("🗺️ Carte index.html générée avec succès.")
+    logger.info("✅ Carte index.html générée avec succès (même si vide).")
 
 if __name__ == "__main__":
     if not USER_ID:
