@@ -1,7 +1,4 @@
-name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install cloudscraper folium requests
+name: Komoot Squadra Sync & Deploy
 
 on:
   # Synchronisation quotidienne automatique
