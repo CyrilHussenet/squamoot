@@ -1,0 +1,215 @@
+name: Komoot Squadra Sync & Deploy
+
+on:
+  # Synchronisation quotidienne automatique
+  schedule:
+    - cron: '0 6 * * *'  # Tous les jours à 6h UTC (7h Paris hiver, 8h été)
+  
+  # Déclenchement manuel depuis GitHub
+  workflow_dispatch:
+  
+  # Déclenchement au push (optionnel)
+  push:
+    branches:
+      - main
+    paths:
+      - 'komoot_squadra_improved.py'
+      - '.github/workflows/komoot-sync.yml'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  sync-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      # ====================================
+      # 1. PREPARATION
+      # ====================================
+      
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Nécessaire pour récupérer l'historique
+      
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: 📦 Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install requests gpxpy folium
+      
+      # ====================================
+      # 2. RECUPERATION DES DONNEES EXISTANTES
+      # ====================================
+      
+      - name: 📥 Récupérer les données existantes (all_points.json)
+        continue-on-error: true
+        run: |
+          echo "🔍 Recherche de all_points.json dans gh-pages..."
+          
+          # Essayer de récupérer depuis gh-pages
+          if git fetch origin gh-pages 2>/dev/null; then
+            if git checkout origin/gh-pages -- all_points.json 2>/dev/null; then
+              echo "✅ all_points.json récupéré depuis gh-pages"
+              ls -lh all_points.json
+            else
+              echo "⚠️ all_points.json non trouvé dans gh-pages"
+              echo "{\"traces\": [], \"tour_ids\": [], \"last_tours\": [], \"stats\": {\"dist\": 0, \"count\": 0}}" > all_points.json
+            fi
+          else
+            echo "ℹ️ Branche gh-pages inexistante (première exécution)"
+            echo "{\"traces\": [], \"tour_ids\": [], \"last_tours\": [], \"stats\": {\"dist\": 0, \"count\": 0}}" > all_points.json
+          fi
+          
+          # Retour sur main
+          git checkout main 2>/dev/null || true
+      
+      # ====================================
+      # 3. SYNCHRONISATION KOMOOT
+      # ====================================
+      
+      - name: 🔄 Synchronisation Komoot
+        env:
+          KOMOOT_USER_ID: ${{ secrets.KOMOOT_USER_ID }}
+          KOMOOT_SESSION_COOKIE: ${{ secrets.KOMOOT_SESSION_COOKIE }}
+          GITHUB_REPO_OWNER: ${{ secrets.GITHUB_REPO_OWNER }}
+          GITHUB_REPO_NAME: ${{ secrets.GITHUB_REPO_NAME }}
+          SIMPLIFY_FACTOR: ${{ vars.SIMPLIFY_FACTOR || '3' }}
+          TILE_ZOOM: ${{ vars.TILE_ZOOM || '14' }}
+          TRACE_OPACITY: ${{ vars.TRACE_OPACITY || '0.6' }}
+          TILE_OPACITY: ${{ vars.TILE_OPACITY || '0.15' }}
+          TILE_COLOR: ${{ vars.TILE_COLOR || '#7ED321' }}
+          TRACE_COLOR: ${{ vars.TRACE_COLOR || '#D0021B' }}
+        run: |
+          echo "=========================================="
+          echo "🚀 KOMOOT SQUADRA MAP - SYNCHRONISATION"
+          echo "=========================================="
+          echo ""
+          echo "Configuration:"
+          echo "  User ID: ${{ secrets.KOMOOT_USER_ID }}"
+          echo "  Simplify Factor: ${SIMPLIFY_FACTOR}"
+          echo "  Tile Zoom: ${TILE_ZOOM}"
+          echo "  Tile Color: ${TILE_COLOR}"
+          echo "  Trace Color: ${TRACE_COLOR}"
+          echo ""
+          
+          python komoot_squadra_improved.py
+          
+          echo ""
+          echo "✅ Synchronisation terminée"
+      
+      # ====================================
+      # 4. VERIFICATION
+      # ====================================
+      
+      - name: 📊 Vérification des fichiers générés
+        run: |
+          echo "🔍 Vérification des fichiers..."
+          
+          if [ ! -f "index.html" ]; then
+            echo "❌ ERREUR: index.html non généré"
+            exit 1
+          fi
+          
+          if [ ! -f "all_points.json" ]; then
+            echo "❌ ERREUR: all_points.json non généré"
+            exit 1
+          fi
+          
+          echo "✅ Fichiers vérifiés:"
+          ls -lh index.html all_points.json
+          
+          # Afficher quelques stats du JSON
+          echo ""
+          echo "📊 Statistiques:"
+          python3 -c "import json; data=json.load(open('all_points.json')); print(f\"  Tours: {data['stats']['count']}\"); print(f\"  Traces: {len(data['traces'])}\")"
+      
+      # ====================================
+      # 5. DEPLOIEMENT GITHUB PAGES
+      # ====================================
+      
+      - name: 🚀 Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: .
+          publish_branch: gh-pages
+          keep_files: false
+          commit_message: '🗺️ Update Squadra Map [Run ${{ github.run_number }}]'
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          # Inclure seulement les fichiers nécessaires
+          exclude_assets: '.github,*.py,*.md,requirements.txt'
+      
+      # ====================================
+      # 6. RESUME
+      # ====================================
+      
+      - name: 📝 Création du résumé
+        if: always()
+        run: |
+          echo "# 🗺️ Komoot Squadra Map - Synchronisation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f "index.html" ]; then
+            echo "## ✅ Synchronisation réussie" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "🌐 **Votre carte est disponible ici:**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "👉 **https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            if [ -f "all_points.json" ]; then
+              echo "## 📊 Statistiques" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+              python3 -c "
+import json
+with open('all_points.json') as f:
+    data = json.load(f)
+    print(f\"Tours synchronisés: {data['stats']['count']}\")
+    print(f\"Traces stockées: {len(data['traces'])}\")
+    print(f\"Derniers tours: {len(data.get('last_tours', []))}\")
+" >> $GITHUB_STEP_SUMMARY
+              echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "## ❌ Échec de la synchronisation" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Consultez les logs ci-dessus pour plus de détails." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🕐 **Date:** $(date +'%d/%m/%Y à %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "🔢 **Run:** #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "⏰ Synchronisation automatique quotidienne" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "🖱️ Synchronisation manuelle" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "📝 Synchronisation suite à un push" >> $GITHUB_STEP_SUMMARY
+          fi
+      
+      # ====================================
+      # 7. NOTIFICATION (Optionnel)
+      # ====================================
+      
+      - name: 📧 Notification (échec uniquement)
+        if: failure()
+        run: |
+          echo "⚠️ La synchronisation a échoué"
+          echo "Vérifiez les logs : https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
