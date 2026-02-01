@@ -23,7 +23,7 @@ TILE_ZOOM = 14
 TILE_COLOR = "#FFA500"
 TRACE_COLOR = "#0000FF"
 
-# Estimation tuiles Z14 pour la France Métropolitaine
+# Estimation tuiles Z14 France Métropolitaine
 TOTAL_TILES_FRANCE = 428000 
 
 def get_scraper():
@@ -32,7 +32,7 @@ def get_scraper():
 def get_city_from_coords(lat, lon):
     url = "https://nominatim.openstreetmap.org/reverse"
     params = {"lat": lat, "lon": lon, "format": "json", "zoom": 10}
-    headers = {'User-Agent': 'KomootSquadraMap/3.0'}
+    headers = {'User-Agent': 'KomootSquadraMap/4.0'}
     try:
         time.sleep(1.1) 
         response = requests.get(url, params=params, headers=headers, timeout=5)
@@ -46,6 +46,7 @@ def fetch_public_tours_list(user_id):
     scraper = get_scraper()
     tours = []
     page = 0
+    logger.info(f"📡 Récupération des activités pour {user_id}...")
     while True:
         url = f"https://api.komoot.de/v007/users/{user_id}/tours/"
         params = {'type': 'tour_recorded', 'sort': 'date', 'status': 'public', 'page': page, 'limit': 50}
@@ -94,11 +95,9 @@ def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, 'r') as f:
             db = json.load(f)
-            # REPARATION DE L'ERREUR : Force dict pour les traces
-            if not isinstance(db.get("traces"), dict):
-                db["traces"] = {}
-            if "tour_details" not in db:
-                db["tour_details"] = {}
+            # Migration/Sécurité : On s'assure que les structures sont des dictionnaires
+            if not isinstance(db.get("traces"), dict): db["traces"] = {}
+            if not isinstance(db.get("tour_details"), dict): db["tour_details"] = {}
             return db
     return {"tour_details": {}, "traces": {}, "tiles": []}
 
@@ -114,9 +113,10 @@ def update_database(user_id):
     count = 0
     for tour in online_tours:
         tid = str(tour['id'])
-        if tid not in db["tour_details"]:
+        # REPARATION : Si on n'a pas les détails OU si la trace est manquante dans le dictionnaire
+        if tid not in db["tour_details"] or tid not in db["traces"]:
             count += 1
-            logger.info(f"🔄 Nouveau tour : {tour['name']}")
+            logger.info(f"🔄 Mise à jour sortie {tid} : {tour['name']}")
             points = fetch_tour_coordinates(tid)
             if points:
                 city = get_city_from_coords(points[0][0], points[0][1])
@@ -127,6 +127,7 @@ def update_database(user_id):
                 db["traces"][tid] = points[::SIMPLIFY_FACTOR]
                 for lat, lon in db["traces"][tid]:
                     existing_tiles.add(deg2num(lat, lon, TILE_ZOOM))
+            
             if count % 10 == 0: save_data(db)
 
     db["tiles"] = list(existing_tiles)
@@ -134,64 +135,84 @@ def update_database(user_id):
     create_map(db)
 
 def create_map(db):
+    # Centrage sur la dernière trace ou France par défaut
     m = folium.Map(location=[46.6, 2.2], zoom_start=6, tiles=None)
     
-    folium.TileLayer('OpenStreetMap', name='Plan').add_to(m)
+    folium.TileLayer('OpenStreetMap', name='Plan (OSM)').add_to(m)
     folium.TileLayer(
         tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        attr='Esri', name='Satellite', overlay=False
+        attr='Esri', name='Satellite (Aérien)', overlay=False
     ).add_to(m)
 
     # Couche Tuiles
-    tile_group = folium.FeatureGroup(name="Tuiles Orange", show=True).add_to(m)
+    tile_group = folium.FeatureGroup(name="Exploration (Tuiles)", show=True).add_to(m)
     for xtile, ytile in db.get("tiles", []):
         nw, se = num2deg(xtile, ytile, TILE_ZOOM), num2deg(xtile + 1, ytile + 1, TILE_ZOOM)
-        folium.Rectangle(bounds=[[nw[0], nw[1]], [se[0], se[1]]], color=None, fill=True, fill_color=TILE_COLOR, fill_opacity=0.4).add_to(tile_group)
+        folium.Rectangle(bounds=[[nw[0], nw[1]], [se[0], se[1]]], color=None, fill=True, fill_color=TILE_COLOR, fill_opacity=0.4, weight=0).add_to(tile_group)
 
     # Couche Traces
-    trace_group = folium.FeatureGroup(name="Parcours", show=True).add_to(m)
+    trace_group = folium.FeatureGroup(name="Parcours GPS", show=True).add_to(m)
     for tid, coords in db.get("traces", {}).items():
         info = db["tour_details"].get(tid, {})
         dist = round(info.get('distance', 0)/1000, 1)
-        popup = f"<b>{info.get('name')}</b><br>📅 {info.get('date')[:10]}<br>📏 {dist}km | ⛰️ {info.get('elevation_up', 0)}m D+"
-        folium.PolyLine(coords, color=TRACE_COLOR, weight=3, opacity=0.7, popup=folium.Popup(popup, max_width=200)).add_to(trace_group)
+        ele = info.get('elevation_up', 0)
+        date = (info.get('date') or "2000-01-01")[:10]
+        
+        popup_html = f"<b>{info.get('name')}</b><br>📅 {date}<br>📏 {dist} km<br>⛰️ {ele} m D+"
+        folium.PolyLine(coords, color=TRACE_COLOR, weight=3, opacity=0.7, 
+                        tooltip=f"{info.get('name')} ({dist}km)",
+                        popup=folium.Popup(popup_html, max_width=200)).add_to(trace_group)
 
     folium.LayerControl(collapsed=False).add_to(m)
     Fullscreen().add_to(m)
     LocateControl().add_to(m)
 
-    # Calcul Stats
+    # Stats mensuelles
     now = datetime.now()
-    cur_m, last_m = now.strftime("%Y-%m"), (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
-    km_cur, km_last = 0, 0
+    this_m_str = now.strftime("%Y-%m")
+    last_m_str = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    km_this, km_last = 0, 0
     for t in db["tour_details"].values():
-        d = t.get('distance', 0)/1000
-        if t.get('date', '').startswith(cur_m): km_cur += d
-        elif t.get('date', '').startswith(last_m): km_last += d
+        d = t.get('distance', 0) / 1000
+        dt = t.get('date', '')
+        if dt.startswith(this_m_str): km_this += d
+        elif dt.startswith(last_m_str): km_last += d
 
-    percent_fr = (len(db["tiles"]) / TOTAL_TILES_FRANCE) * 100
+    percent_fr = (len(db.get("tiles", [])) / TOTAL_TILES_FRANCE) * 100
     
     # Dashboard HTML
+    sorted_tours = sorted(db["tour_details"].values(), key=lambda x: x.get('date') or "", reverse=True)
+    list_html = "".join([f"<tr><td>{t.get('date')[:10]}</td><td>{t['name'][:15]}</td><td><b>{round(t['distance']/1000,1)}k</b></td><td>{t.get('elevation_up',0)}m</td></tr>" for t in sorted_tours[:8]])
+
     html_dash = f"""
     <style>
-        #dash {{ position: fixed; top: 10px; right: 10px; width: 280px; z-index: 9999; background: white; 
-                border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.2); font-family: sans-serif; transition: 0.3s; }}
-        #dash.collapsed {{ width: 40px; height: 40px; overflow: hidden; cursor: pointer; }}
-        .h {{ background: #333; color: white; padding: 10px; border-radius: 10px 10px 0 0; cursor: pointer; display: flex; justify-content: space-between; }}
-        .c {{ padding: 15px; font-size: 12px; }}
-        .val {{ font-size: 18px; font-weight: bold; color: #d35400; }}
+        #dash {{ position: fixed; top: 10px; right: 10px; width: 300px; z-index: 9999; background: rgba(255,255,255,0.95); 
+                border-radius: 10px; box-shadow: 0 0 15px rgba(0,0,0,0.2); font-family: sans-serif; transition: 0.3s; overflow: hidden; }}
+        #dash.collapsed {{ width: 45px; height: 45px; cursor: pointer; }}
+        .h {{ background: #2c3e50; color: white; padding: 12px; cursor: pointer; display: flex; justify-content: space-between; font-weight: bold; }}
+        .c {{ padding: 15px; font-size: 12px; max-height: 80vh; overflow-y: auto; }}
+        .st {{ display: flex; justify-content: space-between; margin-bottom: 10px; background: #f8f9fa; padding: 8px; border-radius: 5px; }}
+        .val {{ font-size: 14px; font-weight: bold; color: #e67e22; }}
+        table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; }}
+        td {{ padding: 5px 0; border-bottom: 1px solid #eee; }}
+        .trend {{ color: {'green' if km_this >= km_last else 'red'}; font-weight: bold; }}
     </style>
     <div id="dash">
-        <div class="h" onclick="document.getElementById('dash').classList.toggle('collapsed')"><span>📊 Stats</span><span>↔</span></div>
+        <div class="h" onclick="document.getElementById('dash').classList.toggle('collapsed')"><span>🚴‍♂️ Squadra Dashboard</span><span>☰</span></div>
         <div class="c">
-            <p>Ce mois: <span class="val">{int(km_cur)} km</span><br><small>Mois dernier: {int(km_last)} km</small></p>
-            <p>Exploration France:<br><span class="val">{percent_fr:.4f}%</span></p>
-            <div style="width:100%; background:#eee; height:8px; border-radius:4px;"><div style="width:{min(percent_fr*500, 100)}%; background:orange; height:100%; border-radius:4px;"></div></div>
+            <div class="st"><div>Mois en cours<br><span class="val">{int(km_this)} km</span></div><div style="text-align:right">Mois dernier<br><span>{int(km_last)} km</span></div></div>
+            <div style="margin-bottom:10px">Tendance: <span class="trend">{'▲' if km_this >= km_last else '▼'} {int(abs(km_this-km_last))} km</span></div>
+            <hr>
+            <div>Exploration France: <b>{percent_fr:.4f}%</b></div>
+            <div style="width:100%; background:#eee; height:8px; border-radius:4px; margin: 5px 0 15px 0;"><div style="width:{min(percent_fr*500, 100)}%; background:orange; height:100%; border-radius:4px;"></div></div>
+            <b>Dernières sorties :</b>
+            <table>{list_html}</table>
         </div>
     </div>
     """
     m.get_root().html.add_child(folium.Element(html_dash))
     m.save("index.html")
+    logger.info("✅ Carte générée avec succès.")
 
 if __name__ == "__main__":
     if USER_ID: update_database(USER_ID)
