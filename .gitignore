@@ -1,1 +1,107 @@
+# 📝 Fichier .gitignore pour Komoot Squadra Map
 
+Créez un fichier nommé `.gitignore` (avec le point au début) à la racine de votre repo avec ce contenu :
+
+```gitignore
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# OS
+Thumbs.db
+*.log
+
+# Fichiers générés (seront dans gh-pages)
+index.html
+all_points.json
+
+# Secrets
+.env
+secrets.json
+*.pem
+
+# Données temporaires
+*.gpx
+temp/
+cache/
+```
+
+## 📋 Instructions
+
+### Sur GitHub (via l'interface web)
+1. Cliquez sur "Add file" > "Create new file"
+2. Nommez le fichier : `.gitignore`
+3. Copiez-collez le contenu ci-dessus
+4. Commit
+
+### En ligne de commande (si vous utilisez git)
+```bash
+# Créez le fichier
+cat > .gitignore << 'EOF'
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# OS
+Thumbs.db
+*.log
+
+# Fichiers générés (seront dans gh-pages)
+index.html
+all_points.json
+
+# Secrets
+.env
+secrets.json
+*.pem
+
+# Données temporaires
+*.gpx
+temp/
+cache/
+EOF
+
+# Ajoutez et committez
+git add .gitignore
+git commit -m "Add .gitignore"
+git push
+```
+
+## ℹ️ Pourquoi ce .gitignore ?
+
+- **index.html** et **all_points.json** : Ne doivent être que dans la branche `gh-pages`, pas dans `main`
+- **__pycache__** : Fichiers Python temporaires
+- **.env** : Pour éviter de commiter des secrets par erreur
+- **cache/**, **temp/** : Dossiers temporaires
