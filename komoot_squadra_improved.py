@@ -124,14 +124,30 @@ def save_data(storage):
 
 
 def get_session_with_retry(max_retries=3):
-    """Crée une session avec cookie et retry en cas d'échec"""
+    """Crée une session avec des headers complets pour éviter le blocage 403"""
     session = requests.Session()
-    session.cookies.set('komoot_session', SESSION_COOKIE, domain='.komoot.com')
-    session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+    
+    # Nettoyage du cookie si l'utilisateur a collé "komoot_session=..." entier
+    cookie_val = SESSION_COOKIE.strip()
+    if "komoot_session=" in cookie_val:
+        cookie_val = cookie_val.split("komoot_session=")[1].split(";")[0]
+
+    # HEADERS COMPLETS (Indispensable pour éviter l'erreur 403)
+    # On injecte le cookie directement dans le header pour être sûr qu'il passe
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Referer': f'https://www.komoot.com/user/{USER_ID}',  # Très important pour Komoot
+        'Origin': 'https://www.komoot.com',
+        'Cookie': f'komoot_session={cookie_val}'
+    }
+    
+    session.headers.update(headers)
     
     for attempt in range(max_retries):
         try:
-            # Test de la session avec une requête simple
+            # Test de la session
             test_url = f"https://www.komoot.com/api/v007/users/{USER_ID}/tours/?limit=1"
             response = session.get(test_url, timeout=10)
             
@@ -139,18 +155,21 @@ def get_session_with_retry(max_retries=3):
                 logger.info(f"✓ Session validée pour l'utilisateur {USER_ID}")
                 return session
             elif response.status_code == 401:
-                logger.error("❌ Cookie de session invalide ou expiré")
+                logger.error("❌ Cookie de session invalide ou expiré (401)")
                 return None
+            elif response.status_code == 403:
+                logger.warning(f"⚠️ 403 Forbidden (Tentative {attempt + 1}) - Le cookie est peut-être bon mais Komoot bloque le script.")
             else:
                 logger.warning(f"Réponse inattendue: {response.status_code}")
                 
         except requests.exceptions.RequestException as e:
             logger.warning(f"Tentative {attempt + 1}/{max_retries} échouée: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)  # Backoff exponentiel
+        
+        # Attente avant nouvel essai
+        if attempt < max_retries - 1:
+            time.sleep(2 + attempt)
     
     return None
-
 
 def fetch_tours_page(session, sort_direction='desc', limit=50):
     """Récupère une page de tours depuis l'API Komoot"""
