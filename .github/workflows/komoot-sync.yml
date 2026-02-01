@@ -1,14 +1,9 @@
 name: Komoot Squadra Sync & Deploy
 
 on:
-  # Synchronisation quotidienne automatique
   schedule:
-    - cron: '0 6 * * *'  # Tous les jours à 6h UTC (7h Paris hiver, 8h été)
-  
-  # Déclenchement manuel depuis GitHub
+    - cron: '0 6 * * *'
   workflow_dispatch:
-  
-  # Déclenchement au push (optionnel)
   push:
     branches:
       - main
@@ -27,14 +22,11 @@ jobs:
     timeout-minutes: 15
     
     steps:
-      # ====================================
-      # 1. PREPARATION
-      # ====================================
-      
+      # 1. PRÉPARATION
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Nécessaire pour récupérer l'historique
+          fetch-depth: 0
       
       - name: 🐍 Setup Python
         uses: actions/setup-python@v5
@@ -45,130 +37,60 @@ jobs:
       - name: 📦 Install dependencies
         run: |
           pip install --upgrade pip
-          # AJOUT DE CLOUDSCRAPER ICI
           pip install requests folium cloudscraper
       
-      # ====================================
-      # 2. RECUPERATION DES DONNEES EXISTANTES
-      # ====================================
-      
-      - name: 📥 Récupérer les données existantes (all_points.json)
+      # 2. RÉCUPÉRATION HISTORIQUE
+      - name: 📥 Récupérer les données existantes
         continue-on-error: true
         run: |
-          echo "🔍 Recherche de all_points.json dans gh-pages..."
-          
-          # Essayer de récupérer depuis gh-pages
-          if git fetch origin gh-pages 2>/dev/null; then
-            if git checkout origin/gh-pages -- all_points.json 2>/dev/null; then
-              echo "✅ all_points.json récupéré depuis gh-pages"
-              ls -lh all_points.json
-            else
-              echo "⚠️ all_points.json non trouvé dans gh-pages"
-              echo "{\"traces\": [], \"tour_ids\": [], \"last_tours\": [], \"stats\": {\"dist\": 0, \"count\": 0}}" > all_points.json
-            fi
-          else
-            echo "ℹ️ Branche gh-pages inexistante (première exécution)"
-            echo "{\"traces\": [], \"tour_ids\": [], \"last_tours\": [], \"stats\": {\"dist\": 0, \"count\": 0}}" > all_points.json
-          fi
-          
-          # Retour sur main
-          git checkout main 2>/dev/null || true
+          # On essaie de récupérer le fichier JSON depuis la branche gh-pages
+          git fetch origin gh-pages 2>/dev/null || true
+          git checkout origin/gh-pages -- all_points.json 2>/dev/null || echo "⚠️ Pas d'historique trouvé, on part de zéro."
       
-      # ====================================
-      # 3. SYNCHRONISATION KOMOOT
-      # ====================================
-      
+      # 3. SYNCHRONISATION
       - name: 🔄 Synchronisation Komoot
         env:
           KOMOOT_USER_ID: ${{ secrets.KOMOOT_USER_ID }}
-          # Le cookie est laissé mais n'est plus critique avec la méthode publique
-          KOMOOT_SESSION_COOKIE: ${{ secrets.KOMOOT_SESSION_COOKIE }}
-          GITHUB_REPO_OWNER: ${{ secrets.GITHUB_REPO_OWNER }}
-          GITHUB_REPO_NAME: ${{ secrets.GITHUB_REPO_NAME }}
-          SIMPLIFY_FACTOR: ${{ vars.SIMPLIFY_FACTOR || '3' }}
-          TILE_ZOOM: ${{ vars.TILE_ZOOM || '14' }}
-          TRACE_OPACITY: ${{ vars.TRACE_OPACITY || '0.6' }}
-          TILE_OPACITY: ${{ vars.TILE_OPACITY || '0.15' }}
-          TILE_COLOR: ${{ vars.TILE_COLOR || '#7ED321' }}
-          TRACE_COLOR: ${{ vars.TRACE_COLOR || '#D0021B' }}
+          # On garde les variables même si le script a des valeurs par défaut
+          SIMPLIFY_FACTOR: '2'
+          TILE_ZOOM: '14'
         run: |
-          echo "=========================================="
-          echo "🚀 KOMOOT SQUADRA MAP - SYNCHRONISATION"
-          echo "=========================================="
-          echo ""
-          echo "Configuration:"
-          echo "  User ID: ${{ secrets.KOMOOT_USER_ID }}"
-          echo "  Simplify Factor: ${SIMPLIFY_FACTOR}"
-          echo "  Tile Zoom: ${TILE_ZOOM}"
-          echo "  Tile Color: ${TILE_COLOR}"
-          echo "  Trace Color: ${TRACE_COLOR}"
-          echo ""
-          
+          echo "🚀 Lancement du script..."
           python komoot_squadra_improved.py
-          
-          echo ""
-          echo "✅ Synchronisation terminée"
       
-      # ====================================
-      # 4. VERIFICATION
-      # ====================================
-      
-      - name: 📊 Vérification des fichiers générés
+      # 4. PRÉPARATION DU DÉPLOIEMENT (LA CORRECTION EST ICI)
+      - name: 📦 Préparer le dossier propre (public)
         run: |
-          echo "🔍 Vérification des fichiers..."
+          echo "📂 Création du dossier de déploiement..."
+          mkdir -p public
           
-          if [ ! -f "index.html" ]; then
-            echo "❌ ERREUR: index.html non généré"
-            exit 1
+          # Copie forcée des fichiers générés vers le dossier public
+          # Si le fichier n'existe pas, on crée un index.html d'erreur pour voir le problème
+          if [ -f "index.html" ]; then
+            cp index.html public/
+            echo "✅ index.html copié"
+          else
+            echo "<h1>Erreur: index.html non généré par le script Python</h1>" > public/index.html
+            echo "❌ index.html manquant - page d'erreur créée"
           fi
           
-          # Le nom du fichier de données dans le nouveau script est 'komoot_data_cache.json'
-          # On vérifie si l'un ou l'autre existe pour éviter de casser le build
-          if [ -f "komoot_data_cache.json" ]; then
-             echo "✅ Fichier de données trouvé: komoot_data_cache.json"
-             # On le renomme temporairement pour la compatibilité du déploiement si besoin
-             cp komoot_data_cache.json all_points.json
-          elif [ ! -f "all_points.json" ]; then
-            echo "❌ ERREUR: Aucun fichier JSON de données trouvé"
-            exit 1
+          if [ -f "all_points.json" ]; then
+            cp all_points.json public/
+            echo "✅ all_points.json copié"
+          else
+            echo "{}" > public/all_points.json
           fi
           
-          echo "✅ Fichiers vérifiés."
-      
-      # ====================================
-      # 5. DEPLOIEMENT GITHUB PAGES
-      # ====================================
-      
+          # Fichier technique pour GitHub Pages
+          touch public/.nojekyll
+
+      # 5. DÉPLOIEMENT
       - name: 🚀 Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: .
+          publish_dir: ./public      # <--- On déploie UNIQUEMENT ce dossier propre
           publish_branch: gh-pages
-          keep_files: false
-          commit_message: '🗺️ Update Squadra Map [Run ${{ github.run_number }}]'
-          user_name: 'github-actions[bot]'
-          user_email: 'github-actions[bot]@users.noreply.github.com'
-          # Inclure seulement les fichiers nécessaires
-          exclude_assets: '.github,*.py,*.md,requirements.txt'
-      
-      # ====================================
-      # 6. RESUME
-      # ====================================
-      
-      - name: 📝 Création du résumé
-        if: always()
-        run: |
-          echo "# 🗺️ Komoot Squadra Map - Synchronisation" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ -f "index.html" ]; then
-            echo "## ✅ Synchronisation réussie" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "🌐 **Votre carte est disponible ici:**" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "👉 **https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "## ❌ Échec de la synchronisation" >> $GITHUB_STEP_SUMMARY
-            echo "Consultez les logs ci-dessus pour plus de détails." >> $GITHUB_STEP_SUMMARY
-          fi
+          force_orphan: true         # <--- Écrase la branche proprement (évite les conflits)
+          user_name: 'KomootBot'
+          user_email: 'bot@komoot-map.com'
