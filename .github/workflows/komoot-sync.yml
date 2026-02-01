@@ -19,7 +19,8 @@ permissions:
 jobs:
   sync-and-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # CORRECTION ICI : On passe de 15 à 60 minutes
+    timeout-minutes: 60
     
     steps:
       # 1. PRÉPARATION
@@ -43,7 +44,6 @@ jobs:
       - name: 📥 Récupérer les données existantes
         continue-on-error: true
         run: |
-          # On essaie de récupérer le fichier JSON depuis la branche gh-pages
           git fetch origin gh-pages 2>/dev/null || true
           git checkout origin/gh-pages -- all_points.json 2>/dev/null || echo "⚠️ Pas d'historique trouvé, on part de zéro."
       
@@ -51,27 +51,24 @@ jobs:
       - name: 🔄 Synchronisation Komoot
         env:
           KOMOOT_USER_ID: ${{ secrets.KOMOOT_USER_ID }}
-          # On garde les variables même si le script a des valeurs par défaut
+          # Paramètres visuels
           SIMPLIFY_FACTOR: '2'
           TILE_ZOOM: '14'
         run: |
           echo "🚀 Lancement du script..."
           python komoot_squadra_improved.py
       
-      # 4. PRÉPARATION DU DÉPLOIEMENT (LA CORRECTION EST ICI)
+      # 4. PRÉPARATION DU DÉPLOIEMENT
       - name: 📦 Préparer le dossier propre (public)
         run: |
           echo "📂 Création du dossier de déploiement..."
           mkdir -p public
           
-          # Copie forcée des fichiers générés vers le dossier public
-          # Si le fichier n'existe pas, on crée un index.html d'erreur pour voir le problème
           if [ -f "index.html" ]; then
             cp index.html public/
             echo "✅ index.html copié"
           else
             echo "<h1>Erreur: index.html non généré par le script Python</h1>" > public/index.html
-            echo "❌ index.html manquant - page d'erreur créée"
           fi
           
           if [ -f "all_points.json" ]; then
@@ -81,7 +78,6 @@ jobs:
             echo "{}" > public/all_points.json
           fi
           
-          # Fichier technique pour GitHub Pages
           touch public/.nojekyll
 
       # 5. DÉPLOIEMENT
@@ -89,8 +85,8 @@ jobs:
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./public      # <--- On déploie UNIQUEMENT ce dossier propre
+          publish_dir: ./public
           publish_branch: gh-pages
-          force_orphan: true         # <--- Écrase la branche proprement (évite les conflits)
+          force_orphan: true
           user_name: 'KomootBot'
           user_email: 'bot@komoot-map.com'
