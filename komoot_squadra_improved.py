@@ -5,7 +5,7 @@ import math
 import logging
 import cloudscraper
 import folium
-from folium.plugins import Fullscreen, LocateControl, Draw  # Import Draw ajouté
+from folium.plugins import Fullscreen, LocateControl, Draw
 import requests
 from datetime import datetime, timedelta
 
@@ -135,26 +135,22 @@ def update_database(user_id):
 def create_map(db):
     m = folium.Map(location=[46.6, 2.2], zoom_start=6, tiles=None)
     
-    # Fonds de carte
     folium.TileLayer('OpenStreetMap', name='Plan (OSM)').add_to(m)
     folium.TileLayer(
         tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
         attr='Esri', name='Satellite (Aérien)', overlay=False
     ).add_to(m)
     
-    # Toponymes en Français sur Satellite
     folium.TileLayer(
         tiles='https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
         attr='OSM France', name='Noms des lieux', overlay=True, opacity=0.7
     ).add_to(m)
 
-    # Couche Tuiles
     tile_group = folium.FeatureGroup(name="Exploration (Tuiles)", show=True).add_to(m)
     for xtile, ytile in db.get("tiles", []):
         nw, se = num2deg(xtile, ytile, TILE_ZOOM), num2deg(xtile + 1, ytile + 1, TILE_ZOOM)
         folium.Rectangle(bounds=[[nw[0], nw[1]], [se[0], se[1]]], color=None, fill=True, fill_color=TILE_COLOR, fill_opacity=0.4, weight=0).add_to(tile_group)
 
-    # Couche Traces
     trace_group = folium.FeatureGroup(name="Parcours GPS", show=True).add_to(m)
     for tid, coords in db.get("traces", {}).items():
         info = db["tour_details"].get(tid, {})
@@ -168,9 +164,9 @@ def create_map(db):
                         popup=folium.Popup(popup_html, max_width=200)).add_to(trace_group)
 
     # ==========================================
-    # OUTIL DE PLANIFICATION (SNAPPING + GPX)
+    # OUTIL DE PLANIFICATION (SNAPPING + UNDO + GPX)
     # ==========================================
-    draw = Draw(
+    Draw(
         export=False, 
         position='topleft',
         draw_options={
@@ -192,16 +188,21 @@ def create_map(db):
         if (!map) return;
 
         var routePoints = [];
-        var fullTrace = [];
+        var segments = []; // Stocke les coordonnées de chaque segment entre deux clics
+        var startMarker = null;
         var routeLayer = L.polyline([], {color: '#00fbff', weight: 5, dashArray: '5, 10'}).addTo(map);
 
         var container = document.createElement('div');
-        container.style.cssText = 'position:fixed; bottom:20px; left:50px; z-index:9999; display:flex; gap:10px;';
+        container.style.cssText = 'position:fixed; bottom:20px; left:50px; z-index:9999; display:flex; gap:10px; flex-wrap: wrap;';
         
         var exportBtn = document.createElement('button');
         exportBtn.innerHTML = '💾 Export GPX';
         exportBtn.style.cssText = 'background:#27ae60; color:white; border:none; padding:10px; border-radius:5px; cursor:pointer; font-weight:bold;';
         
+        var undoBtn = document.createElement('button');
+        undoBtn.innerHTML = '↩️ Annuler';
+        undoBtn.style.cssText = 'background:#f39c12; color:white; border:none; padding:10px; border-radius:5px; cursor:pointer; font-weight:bold;';
+
         var resetBtn = document.createElement('button');
         resetBtn.innerHTML = '🗑️ Effacer';
         resetBtn.style.cssText = 'background:#e74c3c; color:white; border:none; padding:10px; border-radius:5px; cursor:pointer; font-weight:bold;';
@@ -211,9 +212,25 @@ def create_map(db):
         distBadge.style.cssText = 'background:white; padding:10px; border-radius:5px; border:1px solid #ccc; font-weight:bold; color: black;';
 
         container.appendChild(distBadge);
+        container.appendChild(undoBtn);
         container.appendChild(exportBtn);
         container.appendChild(resetBtn);
         document.body.appendChild(container);
+
+        function updateDistance() {
+            var dist = 0;
+            var flat = [].concat(...segments);
+            for (var i = 0; i < flat.length - 1; i++) {
+                dist += L.latLng(flat[i]).distanceTo(L.latLng(flat[i+1]));
+            }
+            distBadge.innerHTML = (dist / 1000).toFixed(1) + ' km';
+        }
+
+        function redraw() {
+            var flat = [].concat(...segments);
+            routeLayer.setLatLngs(flat);
+            updateDistance();
+        }
 
         map.on('click', function(e) {
             var newPoint = e.latlng;
@@ -224,33 +241,47 @@ def create_map(db):
                     .then(data => {
                         if (data.routes && data.routes[0]) {
                             var coords = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
-                            coords.forEach(c => {
-                                routeLayer.addLatLng(c);
-                                fullTrace.push(c);
-                            });
+                            segments.push(coords);
                             routePoints.push(newPoint);
-                            var d = (data.routes[0].distance / 1000);
-                            var current = parseFloat(distBadge.innerHTML);
-                            distBadge.innerHTML = (current + d).toFixed(1) + ' km';
+                            redraw();
                         }
                     });
             } else {
                 routePoints.push(newPoint);
-                fullTrace.push([newPoint.lat, newPoint.lng]);
-                L.circleMarker(newPoint, {radius: 5, color: 'green'}).addTo(map);
+                segments.push([[newPoint.lat, newPoint.lng]]);
+                startMarker = L.circleMarker(newPoint, {radius: 5, color: 'green', fillOpacity: 1}).addTo(map);
+                updateDistance();
             }
         });
 
+        undoBtn.onclick = function() {
+            if (segments.length > 1) {
+                segments.pop();
+                routePoints.pop();
+                redraw();
+            } else if (segments.length === 1) {
+                segments.pop();
+                routePoints.pop();
+                if(startMarker) map.removeLayer(startMarker);
+                startMarker = null;
+                redraw();
+            }
+        };
+
         resetBtn.onclick = function() {
-            routePoints = []; fullTrace = []; routeLayer.setLatLngs([]);
+            routePoints = []; segments = [];
+            routeLayer.setLatLngs([]);
             distBadge.innerHTML = '0.0 km';
+            if(startMarker) map.removeLayer(startMarker);
+            startMarker = null;
             map.eachLayer(function(l) { if(l instanceof L.CircleMarker) map.removeLayer(l); });
         };
 
         exportBtn.onclick = function() {
-            if (fullTrace.length < 2) return alert("Trace vide !");
+            var flat = [].concat(...segments);
+            if (flat.length < 2) return alert("Trace vide !");
             var gpx = '<?xml version="1.0" encoding="UTF-8"?><gpx version="1.1" creator="SquadraMap"><trk><name>Plan Squadra</name><trkseg>';
-            fullTrace.forEach(p => { gpx += `<trkpt lat="${p[0]}" lon="${p[1]}"></trkpt>`; });
+            flat.forEach(p => { gpx += `<trkpt lat="${p[0]}" lon="${p[1]}"></trkpt>`; });
             gpx += '</trkseg></trk></gpx>';
             var blob = new Blob([gpx], {type: 'application/gpx+xml'});
             var a = document.createElement('a');
