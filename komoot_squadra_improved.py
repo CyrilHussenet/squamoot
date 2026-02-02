@@ -5,7 +5,7 @@ import math
 import logging
 import cloudscraper
 import folium
-from folium.plugins import Fullscreen, LocateControl
+from folium.plugins import Fullscreen, LocateControl, Draw  # Import Draw ajouté
 import requests
 from datetime import datetime, timedelta
 
@@ -95,7 +95,6 @@ def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, 'r') as f:
             db = json.load(f)
-            # Migration/Sécurité : On s'assure que les structures sont des dictionnaires
             if not isinstance(db.get("traces"), dict): db["traces"] = {}
             if not isinstance(db.get("tour_details"), dict): db["tour_details"] = {}
             return db
@@ -113,7 +112,6 @@ def update_database(user_id):
     count = 0
     for tour in online_tours:
         tid = str(tour['id'])
-        # REPARATION : Si on n'a pas les détails OU si la trace est manquante dans le dictionnaire
         if tid not in db["tour_details"] or tid not in db["traces"]:
             count += 1
             logger.info(f"🔄 Mise à jour sortie {tid} : {tour['name']}")
@@ -135,13 +133,19 @@ def update_database(user_id):
     create_map(db)
 
 def create_map(db):
-    # Centrage sur la dernière trace ou France par défaut
     m = folium.Map(location=[46.6, 2.2], zoom_start=6, tiles=None)
     
+    # Fonds de carte
     folium.TileLayer('OpenStreetMap', name='Plan (OSM)').add_to(m)
     folium.TileLayer(
         tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
         attr='Esri', name='Satellite (Aérien)', overlay=False
+    ).add_to(m)
+    
+    # Toponymes en Français sur Satellite
+    folium.TileLayer(
+        tiles='https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
+        attr='OSM France', name='Noms des lieux', overlay=True, opacity=0.7
     ).add_to(m)
 
     # Couche Tuiles
@@ -162,6 +166,102 @@ def create_map(db):
         folium.PolyLine(coords, color=TRACE_COLOR, weight=3, opacity=0.7, 
                         tooltip=f"{info.get('name')} ({dist}km)",
                         popup=folium.Popup(popup_html, max_width=200)).add_to(trace_group)
+
+    # ==========================================
+    # OUTIL DE PLANIFICATION (SNAPPING + GPX)
+    # ==========================================
+    draw = Draw(
+        export=False, 
+        position='topleft',
+        draw_options={
+            'polyline': {'shapeOptions': {'color': '#00fbff', 'weight': 5}},
+            'polygon': False, 'circle': False, 'marker': False, 'circlemarker': False, 'rectangle': False,
+        }
+    ).add_to(m)
+
+    routing_js = """
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        var map = null;
+        for (var key in window) {
+            if (key.startsWith('map_') && window[key] instanceof L.Map) {
+                map = window[key];
+                break;
+            }
+        }
+        if (!map) return;
+
+        var routePoints = [];
+        var fullTrace = [];
+        var routeLayer = L.polyline([], {color: '#00fbff', weight: 5, dashArray: '5, 10'}).addTo(map);
+
+        var container = document.createElement('div');
+        container.style.cssText = 'position:fixed; bottom:20px; left:50px; z-index:9999; display:flex; gap:10px;';
+        
+        var exportBtn = document.createElement('button');
+        exportBtn.innerHTML = '💾 Export GPX';
+        exportBtn.style.cssText = 'background:#27ae60; color:white; border:none; padding:10px; border-radius:5px; cursor:pointer; font-weight:bold;';
+        
+        var resetBtn = document.createElement('button');
+        resetBtn.innerHTML = '🗑️ Effacer';
+        resetBtn.style.cssText = 'background:#e74c3c; color:white; border:none; padding:10px; border-radius:5px; cursor:pointer; font-weight:bold;';
+
+        var distBadge = document.createElement('div');
+        distBadge.innerHTML = '0.0 km';
+        distBadge.style.cssText = 'background:white; padding:10px; border-radius:5px; border:1px solid #ccc; font-weight:bold; color: black;';
+
+        container.appendChild(distBadge);
+        container.appendChild(exportBtn);
+        container.appendChild(resetBtn);
+        document.body.appendChild(container);
+
+        map.on('click', function(e) {
+            var newPoint = e.latlng;
+            if (routePoints.length > 0) {
+                var lastPoint = routePoints[routePoints.length - 1];
+                fetch(`https://router.project-osrm.org/route/v1/foot/${lastPoint.lng},${lastPoint.lat};${newPoint.lng},${newPoint.lat}?overview=full&geometries=geojson`)
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.routes && data.routes[0]) {
+                            var coords = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+                            coords.forEach(c => {
+                                routeLayer.addLatLng(c);
+                                fullTrace.push(c);
+                            });
+                            routePoints.push(newPoint);
+                            var d = (data.routes[0].distance / 1000);
+                            var current = parseFloat(distBadge.innerHTML);
+                            distBadge.innerHTML = (current + d).toFixed(1) + ' km';
+                        }
+                    });
+            } else {
+                routePoints.push(newPoint);
+                fullTrace.push([newPoint.lat, newPoint.lng]);
+                L.circleMarker(newPoint, {radius: 5, color: 'green'}).addTo(map);
+            }
+        });
+
+        resetBtn.onclick = function() {
+            routePoints = []; fullTrace = []; routeLayer.setLatLngs([]);
+            distBadge.innerHTML = '0.0 km';
+            map.eachLayer(function(l) { if(l instanceof L.CircleMarker) map.removeLayer(l); });
+        };
+
+        exportBtn.onclick = function() {
+            if (fullTrace.length < 2) return alert("Trace vide !");
+            var gpx = '<?xml version="1.0" encoding="UTF-8"?><gpx version="1.1" creator="SquadraMap"><trk><name>Plan Squadra</name><trkseg>';
+            fullTrace.forEach(p => { gpx += `<trkpt lat="${p[0]}" lon="${p[1]}"></trkpt>`; });
+            gpx += '</trkseg></trk></gpx>';
+            var blob = new Blob([gpx], {type: 'application/gpx+xml'});
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'plan_squadra.gpx';
+            a.click();
+        };
+    });
+    </script>
+    """
+    m.get_root().html.add_child(folium.Element(routing_js))
 
     folium.LayerControl(collapsed=False).add_to(m)
     Fullscreen().add_to(m)
@@ -190,10 +290,10 @@ def create_map(db):
                 border-radius: 10px; box-shadow: 0 0 15px rgba(0,0,0,0.2); font-family: sans-serif; transition: 0.3s; overflow: hidden; }}
         #dash.collapsed {{ width: 45px; height: 45px; cursor: pointer; }}
         .h {{ background: #2c3e50; color: white; padding: 12px; cursor: pointer; display: flex; justify-content: space-between; font-weight: bold; }}
-        .c {{ padding: 15px; font-size: 12px; max-height: 80vh; overflow-y: auto; }}
+        .c {{ padding: 15px; font-size: 12px; max-height: 80vh; overflow-y: auto; color: black; }}
         .st {{ display: flex; justify-content: space-between; margin-bottom: 10px; background: #f8f9fa; padding: 8px; border-radius: 5px; }}
         .val {{ font-size: 14px; font-weight: bold; color: #e67e22; }}
-        table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; }}
+        table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; color: black; }}
         td {{ padding: 5px 0; border-bottom: 1px solid #eee; }}
         .trend {{ color: {'green' if km_this >= km_last else 'red'}; font-weight: bold; }}
     </style>
